@@ -15,13 +15,19 @@ struct optional {
   optional() = default;
   optional(std::nullopt_t) noexcept {}
 
-  template <typename... Ts>
-  optional(Ts&&... t) noexcept(std::is_nothrow_constructible_v<T, Ts...>) {
-    new (&storage_[0]) T(std::forward<Ts>(t)...);
+  template <typename U,
+            std::enable_if_t<
+                std::is_constructible_v<T, U&&> &&
+                !std::is_same_v<std::remove_cvref_t<U>, optional<T>> &&
+                !std::is_same_v<std::remove_cvref_t<U>, std::nullopt_t>,
+                int> = 0>
+  optional(U&& u) noexcept(std::is_nothrow_constructible_v<T, U&&>) {
+    new (&storage_[0]) T(std::forward<U>(u));
     valid_ = true;
   }
 
   optional(optional const& other) { copy(other); }
+  optional(optional&& other) noexcept { move(std::move(other)); }
 
   optional& operator=(optional const& other) {
     if (this != &other) {
@@ -30,8 +36,6 @@ struct optional {
     }
     return *this;
   }
-
-  optional(optional&& other) noexcept { move(std::move(other)); }
 
   optional& operator=(optional&& other) noexcept {
     if (this != &other) {
