@@ -217,7 +217,7 @@ struct variant {
   }
 
   template <typename F>
-  auto apply(F&& f) -> decltype(f(std::declval<type_at_index_t<0U, T...>&>())) {
+  decltype(auto) apply(F&& f) {
     if (idx_ == NO_VALUE) {
       throw_exception(std::runtime_error{"variant::apply: no value"});
     }
@@ -225,8 +225,7 @@ struct variant {
   }
 
   template <typename F>
-  auto apply(F&& f) const
-      -> decltype(f(std::declval<type_at_index_t<0U, T...>>())) {
+  decltype(auto) apply(F&& f) const {
     if (idx_ == NO_VALUE) {
       throw_exception(std::runtime_error{"variant::apply: no value"});
     }
@@ -439,12 +438,12 @@ using cista::variant;
 namespace std {
 
 template <typename Visitor, typename... T>
-constexpr auto visit(Visitor&& vis, cista::variant<T...>&& v) {
+constexpr decltype(auto) visit(Visitor&& vis, cista::variant<T...>&& v) {
   return v.apply(std::forward<Visitor>(vis));
 }
 
 template <typename Visitor, typename... T>
-constexpr auto visit(Visitor&& vis, cista::variant<T...> const& v) {
+constexpr decltype(auto) visit(Visitor&& vis, cista::variant<T...> const& v) {
   return v.apply(vis);
 }
 
