@@ -242,6 +242,51 @@ TEST_CASE("variant get_if") {
   CHECK(*str == "hello test test test test");
 }
 
+TEST_CASE("variant supports 32 alternatives") {
+  using variant32 =
+      data::variant<std::integral_constant<int, 0>,
+                    std::integral_constant<int, 1>,
+                    std::integral_constant<int, 2>,
+                    std::integral_constant<int, 3>,
+                    std::integral_constant<int, 4>,
+                    std::integral_constant<int, 5>,
+                    std::integral_constant<int, 6>,
+                    std::integral_constant<int, 7>,
+                    std::integral_constant<int, 8>,
+                    std::integral_constant<int, 9>,
+                    std::integral_constant<int, 10>,
+                    std::integral_constant<int, 11>,
+                    std::integral_constant<int, 12>,
+                    std::integral_constant<int, 13>,
+                    std::integral_constant<int, 14>,
+                    std::integral_constant<int, 15>,
+                    std::integral_constant<int, 16>,
+                    std::integral_constant<int, 17>,
+                    std::integral_constant<int, 18>,
+                    std::integral_constant<int, 19>,
+                    std::integral_constant<int, 20>,
+                    std::integral_constant<int, 21>,
+                    std::integral_constant<int, 22>,
+                    std::integral_constant<int, 23>,
+                    std::integral_constant<int, 24>,
+                    std::integral_constant<int, 25>,
+                    std::integral_constant<int, 26>,
+                    std::integral_constant<int, 27>,
+                    std::integral_constant<int, 28>,
+                    std::integral_constant<int, 29>,
+                    std::integral_constant<int, 30>,
+                    std::integral_constant<int, 31>>;
+
+  variant32 v{std::integral_constant<int, 31>{}};
+
+  static_assert(cista::variant_size_v<variant32> == 32);
+  CHECK(v.index() == 31);
+  CHECK(cista::holds_alternative<std::integral_constant<int, 31>>(v));
+  CHECK(cista::get_if<31>(v) != nullptr);
+  CHECK(v.apply([](auto&& el) { return std::decay_t<decltype(el)>::value; }) ==
+        31);
+}
+
 TEST_CASE("std visit") {
   std::visit(
       [](auto&& x) {
