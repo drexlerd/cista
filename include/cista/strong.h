@@ -6,7 +6,7 @@
 #include <type_traits>
 #include <utility>
 
-#include "cista/cuda_check.h"
+#include "cista/gpu_compat.h"
 
 namespace cista {
 
@@ -160,7 +160,7 @@ template <typename T>
 constexpr auto const is_strong_v = is_strong<T>::value;
 
 template <typename T, typename Tag>
-CISTA_CUDA_COMPAT inline constexpr typename strong<T, Tag>::value_t to_idx(
+CISTA_GPU_COMPAT inline constexpr typename strong<T, Tag>::value_t to_idx(
     strong<T, Tag> const& s) {
   return s.v_;
 }
@@ -179,7 +179,7 @@ template <typename T>
 using base_t = typename base_type<T>::type;
 
 template <typename T>
-CISTA_CUDA_COMPAT constexpr T to_idx(T const& t) {
+CISTA_GPU_COMPAT constexpr T to_idx(T const& t) {
   return t;
 }
 

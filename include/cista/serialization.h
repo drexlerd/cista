@@ -13,6 +13,7 @@
 #include "cista/containers.h"
 #include "cista/decay.h"
 #include "cista/endian/conversion.h"
+#include "cista/free_self_allocated.h"
 #include "cista/hash.h"
 #include "cista/mode.h"
 #include "cista/offset_t.h"
@@ -27,6 +28,18 @@
 #include "cista/verify.h"
 
 namespace cista {
+
+namespace detail {
+template <typename T, mode Mode>
+struct is_verbatim_integer_vector : std::false_type {};
+
+template <typename T, template <typename> typename Ptr, bool Indexed,
+          typename SizeType, mode Mode>
+struct is_verbatim_integer_vector<basic_vector<T, Ptr, Indexed, SizeType>, Mode>
+    : std::bool_constant<std::is_integral_v<T> && !std::is_same_v<T, bool> &&
+                         (sizeof(T) == 1 ||
+                          !endian_conversion_necessary<Mode>())> {};
+}  // namespace detail
 
 // =============================================================================
 // SERIALIZE
@@ -190,11 +203,15 @@ void serialize(Ctx& c,
     }
   }
 
-  if (origin->el_ != nullptr) {
-    auto i = 0U;
-    for (auto it = start; it != start + static_cast<offset_t>(size);
-         it += serialized_size<T>()) {
-      serialize(c, static_cast<T const*>(origin->el_ + i++), it);
+  // Integers that need no endian conversion were already copied in their
+  // complete serialized representation by c.write above.
+  if constexpr (!detail::is_verbatim_integer_vector<Type, Ctx::MODE>::value) {
+    if (origin->el_ != nullptr) {
+      auto i = 0U;
+      for (auto it = start; it != start + static_cast<offset_t>(size);
+           it += serialized_size<T>()) {
+        serialize(c, static_cast<T const*>(origin->el_ + i++), it);
+      }
     }
   }
 }
@@ -516,7 +533,8 @@ void serialize(Target& t, T& value) {
     }
   }
 
-  if constexpr (is_mode_enabled(Mode, mode::WITH_INTEGRITY)) {
+  if constexpr (is_mode_enabled(Mode, mode::WITH_INTEGRITY) ||
+                is_mode_enabled(Mode, mode::SKIP_INTEGRITY)) {
     auto const csum =
         c.checksum(integrity_offset + static_cast<offset_t>(sizeof(hash_t)));
     c.write(integrity_offset, convert_endian<Mode>(csum));
@@ -675,8 +693,9 @@ void check(std::uint8_t const* const from, std::uint8_t const* const to) {
            "invalid version");
   } else if constexpr ((Mode & mode::WITH_STATIC_VERSION) ==
                        mode::WITH_STATIC_VERSION) {
+    constexpr auto const expected = static_type_hash<T>();
     verify(convert_endian<Mode>(*reinterpret_cast<hash_t const*>(from)) ==
-               static_type_hash<T>(),
+               expected,
            "invalid static version");
   }
 
@@ -743,7 +762,13 @@ void deserialize(Ctx const& c, T* el) {
   if constexpr (is_mode_disabled(Ctx::MODE, mode::UNCHECKED)) {
     check_state(c, el);
   }
-  recurse(c, el, [&](auto* entry) { deserialize(c, entry); });
+  // The vector's check_state validates the complete buffer and its alignment.
+  // Non-bool integers need no per-element work unless endian conversion is
+  // needed. Keep generic recurse callbacks unchanged for other callers.
+  if constexpr (!detail::is_verbatim_integer_vector<decay_t<T>,
+                                                    Ctx::MODE>::value) {
+    recurse(c, el, [&](auto* entry) { deserialize(c, entry); });
+  }
 }
 
 // --- PAIR<A,B> ---

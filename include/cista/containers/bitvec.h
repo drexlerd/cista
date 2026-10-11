@@ -2,15 +2,14 @@
 
 #include <cassert>
 #include <cinttypes>
+#include <algorithm>
 #include <atomic>
 #include <iosfwd>
 #include <limits>
-#include <numeric>
 #include <optional>
 #include <string>
 #include <string_view>
 #include <tuple>
-#include <type_traits>
 
 #include "cista/atomic.h"
 #include "cista/bit_counting.h"
@@ -35,7 +34,7 @@ struct basic_bitvec {
   constexpr basic_bitvec(Vec&& v, size_type const size)
       : size_{size},  // inaccurate for loading mmap vector
         blocks_{std::move(v)} {}
-  static constexpr basic_bitvec max(std::size_t const size) {
+  static constexpr basic_bitvec max(size_type const size) {
     basic_bitvec ret;
     ret.resize(size);
     for (auto& b : ret.blocks_) {
@@ -79,10 +78,9 @@ struct basic_bitvec {
   void set(std::string_view s) {
     assert(std::all_of(begin(s), end(s),
                        [](char const c) { return c == '0' || c == '1'; }));
-    resize(s.size());
-    for (auto i = std::size_t{0U};
-         i != std::min(static_cast<std::size_t>(size_), s.size()); ++i) {
-      set(i, s[s.size() - i - 1] != '0');
+    resize(static_cast<size_type>(s.size()));
+    for (auto i = size_type{0U}; i != size_; ++i) {
+      set(Key{i}, s[s.size() - i - 1U] != '0');
     }
   }
 
@@ -91,36 +89,32 @@ struct basic_bitvec {
     assert((to_idx(i) / bits_per_block) < blocks_.size());
     auto& block = blocks_[static_cast<size_type>(to_idx(i)) / bits_per_block];
     auto const bit = to_idx(i) % bits_per_block;
-    if (val) {
-      block |= (block_t{1U} << bit);
-    } else {
-      block &= (~block_t{0U} ^ (block_t{1U} << bit));
-    }
+    auto const mask = block_t{1U} << bit;
+    block = (block & ~mask) | (static_cast<block_t>(val) << bit);
   }
 
   template <bool IsAtomic = false>
   void set(Key const i, bool const val = true) noexcept {
-    assert(i < size_);
-    assert((to_idx(i) / bits_per_block) < blocks_.size());
+    if constexpr (!IsAtomic) {
+      set(i, val);
+    } else {
+      assert(i < size_);
+      assert((to_idx(i) / bits_per_block) < blocks_.size());
 
-    auto const bit = to_idx(i) % bits_per_block;
-    auto& block = blocks_[static_cast<size_type>(to_idx(i)) / bits_per_block];
-    if constexpr (IsAtomic) {
+      auto const bit = to_idx(i) % bits_per_block;
+      auto& block = blocks_[static_cast<size_type>(to_idx(i)) / bits_per_block];
       if (val) {
         fetch_or(block, block_t{1U} << bit);
       } else {
         fetch_and(block, (~block_t{0U} ^ (block_t{1U} << bit)));
       }
-    } else {
-      if (val) {
-        block |= (block_t{1U} << bit);
-      } else {
-        block &= (~block_t{0U} ^ (block_t{1U} << bit));
-      }
     }
   }
 
-  void reset() noexcept { blocks_ = {}; }
+  void reset() noexcept {
+    blocks_ = {};
+    size_ = 0U;
+  }
 
   bool operator[](Key const i) const noexcept { return test(i); }
 
@@ -151,13 +145,11 @@ struct basic_bitvec {
     if (empty()) {
       return;
     }
-    auto const check_block = [&](size_type const i, block_t const block) {
-      if (block != 0U) {
-        for (auto bit = size_type{0U}; bit != bits_per_block; ++bit) {
-          if ((block & (block_t{1U} << bit)) != 0U) {
-            f(Key{i * bits_per_block + bit});
-          }
-        }
+    auto const check_block = [&](size_type const i, block_t block) {
+      while (block != 0U) {
+        auto const bit = trailing_zeros(block);
+        f(Key{i * bits_per_block + bit});
+        block &= block - 1U;
       }
     };
     for (auto i = size_type{0U}; i != blocks_.size() - 1; ++i) {
@@ -166,56 +158,75 @@ struct basic_bitvec {
     check_block(blocks_.size() - 1, sanitized_last_block());
   }
 
-  std::optional<Key> next_set_bit(size_type const i) const {
+  // iterate bits set in (*this & o)
+  template <typename Fn>
+  void for_each_set_bit(basic_bitvec const& o, Fn&& f) const {
+    if (empty() || o.empty()) {
+      return;
+    }
+    assert(blocks_.size() == o.blocks_.size());
+    auto const check_block = [&](size_type const i, block_t block) {
+      while (block != 0U) {
+        auto const bit = trailing_zeros(block);
+        f(Key{i * bits_per_block + bit});
+        block &= block - 1U;
+      }
+    };
+    for (auto i = size_type{0U}; i != blocks_.size() - 1; ++i) {
+      check_block(i, blocks_[i] & o.blocks_[i]);
+    }
+    check_block(blocks_.size() - 1,
+                sanitized_last_block() & o.sanitized_last_block());
+  }
+
+  // iterate bits set in (*this & ~o)
+  template <typename Fn>
+  void for_each_set_bit_and_not(basic_bitvec const& o, Fn&& f) const {
+    if (empty()) {
+      return;
+    }
+    if (o.empty()) {
+      for_each_set_bit(std::forward<Fn>(f));
+      return;
+    }
+    assert(blocks_.size() == o.blocks_.size());
+    auto const check_block = [&](size_type const i, block_t block) {
+      while (block != 0U) {
+        auto const bit = trailing_zeros(block);
+        f(Key{i * bits_per_block + bit});
+        block &= block - 1U;
+      }
+    };
+    for (auto i = size_type{0U}; i != blocks_.size() - 1; ++i) {
+      check_block(i, blocks_[i] & ~o.blocks_[i]);
+    }
+    check_block(blocks_.size() - 1,
+                sanitized_last_block() & ~o.sanitized_last_block());
+  }
+
+  std::optional<Key> next_set_bit(Key const k) const {
+    auto const i = static_cast<size_type>(to_idx(k));
     if (i >= size()) {
       return std::nullopt;
     }
 
-    auto const first_block_idx = i / bits_per_block;
-    auto const first_block = first_block_idx == blocks_.size() - 1
-                                 ? sanitized_last_block()
-                                 : blocks_[first_block_idx];
-    if (first_block != 0U) {
-      auto const first_bit = i % bits_per_block;
-      auto const n = std::min(size(), bits_per_block);
-      for (auto bit = first_bit; bit != n; ++bit) {
-        if ((first_block & (block_t{1U} << bit)) != 0U) {
-          return Key{first_block_idx * bits_per_block + bit};
-        }
-      }
-    }
+    auto const last_block_idx = blocks_.size() - 1U;
+    auto block_idx = i / bits_per_block;
+    auto block = block_idx == last_block_idx ? sanitized_last_block()
+                                             : blocks_[block_idx];
+    block &= (~block_t{0U}) << (i % bits_per_block);
 
-    if (first_block_idx + 1U == blocks_.size()) {
-      return std::nullopt;
-    }
-
-    auto const check_block = [&](size_type const block_idx,
-                                 block_t const block) -> std::optional<Key> {
+    while (true) {
       if (block != 0U) {
-        for (auto bit = size_type{0U}; bit != bits_per_block; ++bit) {
-          if ((block & (block_t{1U} << bit)) != 0U) {
-            return Key{block_idx * bits_per_block + bit};
-          }
-        }
+        return Key{block_idx * bits_per_block + trailing_zeros(block)};
       }
-      return std::nullopt;
-    };
-
-    for (auto block_idx = first_block_idx + 1U; block_idx != blocks_.size() - 1;
-         ++block_idx) {
-      if (auto const set_bit_idx = check_block(block_idx, blocks_[block_idx]);
-          set_bit_idx.has_value()) {
-        return set_bit_idx;
+      if (block_idx == last_block_idx) {
+        return std::nullopt;
       }
+      ++block_idx;
+      block = block_idx == last_block_idx ? sanitized_last_block()
+                                          : blocks_[block_idx];
     }
-
-    if (auto const set_bit_idx =
-            check_block(blocks_.size() - 1, sanitized_last_block());
-        set_bit_idx.has_value()) {
-      return set_bit_idx;
-    }
-
-    return std::nullopt;
   }
 
   std::optional<Key> get_next(std::atomic_size_t& next) const {
@@ -225,7 +236,8 @@ struct basic_bitvec {
       if (!idx.has_value()) {
         return std::nullopt;
       }
-      if (next.compare_exchange_weak(expected, *idx + 1U)) {
+      if (next.compare_exchange_weak(
+              expected, static_cast<std::size_t>(to_idx(*idx)) + 1U)) {
         return idx;
       }
     }
@@ -258,11 +270,10 @@ struct basic_bitvec {
   }
 
   std::string str() const {
-    auto s = std::string{};
-    s.resize(size_);
-    for (auto i = 0U; i != size_; ++i) {
-      s[i] = test(size_ - i - 1) ? '1' : '0';
-    }
+    auto s = std::string(size_, '0');
+    for_each_set_bit([&](Key const i) {
+      s[size_ - static_cast<size_type>(to_idx(i)) - 1U] = '1';
+    });
     return s;
   }
 
@@ -298,10 +309,11 @@ struct basic_bitvec {
       return false;
     }
 
-    for (int i = a.blocks_.size() - 2; i != -1; --i) {
-      if (a.blocks_[i] < b.blocks_[i]) {
+    for (auto i = a.blocks_.size() - 1U; i != 0U; --i) {
+      auto const idx = i - 1U;
+      if (a.blocks_[idx] < b.blocks_[idx]) {
         return true;
-      } else if (b.blocks_[i] < a.blocks_[i]) {
+      } else if (b.blocks_[idx] < a.blocks_[idx]) {
         return false;
       }
     }
@@ -330,7 +342,7 @@ struct basic_bitvec {
   basic_bitvec& operator&=(basic_bitvec const& o) noexcept {
     assert(size() == o.size());
 
-    for (auto i = 0U; i < blocks_.size(); ++i) {
+    for (auto i = size_type{0U}; i < blocks_.size(); ++i) {
       blocks_[i] &= o.blocks_[i];
     }
     return *this;
@@ -339,7 +351,7 @@ struct basic_bitvec {
   basic_bitvec& operator|=(basic_bitvec const& o) noexcept {
     assert(size() == o.size());
 
-    for (auto i = 0U; i < blocks_.size(); ++i) {
+    for (auto i = size_type{0U}; i < blocks_.size(); ++i) {
       blocks_[i] |= o.blocks_[i];
     }
     return *this;
@@ -348,7 +360,7 @@ struct basic_bitvec {
   basic_bitvec& operator^=(basic_bitvec const& o) noexcept {
     assert(size() == o.size());
 
-    for (auto i = 0U; i < blocks_.size(); ++i) {
+    for (auto i = size_type{0U}; i < blocks_.size(); ++i) {
       blocks_[i] ^= o.blocks_[i];
     }
     return *this;
@@ -385,7 +397,7 @@ struct basic_bitvec {
 
   basic_bitvec& operator>>=(std::size_t const shift) noexcept {
     if (shift >= size_) {
-      reset();
+      zero_out();
       return *this;
     }
 
@@ -428,7 +440,7 @@ struct basic_bitvec {
 
   basic_bitvec& operator<<=(std::size_t const shift) noexcept {
     if (shift >= size_) {
-      reset();
+      zero_out();
       return *this;
     }
 
@@ -456,7 +468,7 @@ struct basic_bitvec {
         blocks_[shift_blocks] = blocks_[0] << shift_bits;
       }
 
-      for (auto i = 0U; i != shift_blocks; ++i) {
+      for (auto i = std::size_t{0U}; i != shift_blocks; ++i) {
         blocks_[i] = 0U;
       }
 
