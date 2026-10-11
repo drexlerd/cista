@@ -106,17 +106,18 @@ struct variant {
             typename = std::enable_if_t<
                 index_of_type<std::decay_t<Arg>, T...>() != TYPE_NOT_FOUND>>
   variant& operator=(Arg&& arg) {
-    if (index_of_type<Arg, T...>() == idx_) {
+    using decayed_t = std::decay_t<Arg>;
+    if (index_of_type<decayed_t, T...>() == idx_) {
       apply([&](auto&& el) {
-        if constexpr (std::is_same_v<std::decay_t<decltype(el)>, Arg>) {
-          el = std::move(arg);
+        if constexpr (std::is_same_v<std::decay_t<decltype(el)>, decayed_t>) {
+          el = std::forward<Arg>(arg);
         }
       });
       return *this;
     }
     destruct();
-    idx_ = static_cast<index_t>(index_of_type<Arg, T...>());
-    new (&storage_) std::decay_t<Arg>{std::forward<Arg>(arg)};
+    idx_ = static_cast<index_t>(index_of_type<decayed_t, T...>());
+    new (&storage_) decayed_t{std::forward<Arg>(arg)};
     return *this;
   }
 #if _MSVC_LANG >= 202002L || __cplusplus >= 202002L

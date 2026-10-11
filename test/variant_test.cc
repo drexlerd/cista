@@ -242,6 +242,33 @@ TEST_CASE("variant get_if") {
   CHECK(*str == "hello test test test test");
 }
 
+TEST_CASE("variant assignment of the active alternative") {
+  struct a {
+    int v_;
+  };
+  struct b {
+    int v_;
+  };
+  data::variant<a, b> v{b{1}};
+
+  auto lvalue = b{2};
+  v = lvalue;
+  CHECK(cista::get<b>(v).v_ == 2);
+  CHECK(lvalue.v_ == 2);
+
+  auto const const_lvalue = b{3};
+  v = const_lvalue;
+  CHECK(cista::get<b>(v).v_ == 3);
+
+  auto const other = data::variant<a, b>{b{4}};
+  v = other;
+  CHECK(cista::get<b>(v).v_ == 4);
+
+  v = a{5};
+  CHECK(v.index() == 0);
+  CHECK(cista::get<a>(v).v_ == 5);
+}
+
 TEST_CASE("variant supports 32 alternatives") {
   using variant32 =
       data::variant<std::integral_constant<int, 0>,
