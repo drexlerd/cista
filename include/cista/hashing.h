@@ -1,6 +1,5 @@
 #pragma once
 
-#include <chrono>
 #include <cstdint>
 #include <functional>
 #include <optional>
@@ -135,22 +134,6 @@ struct hashing {
                         to_tuple_works_v<Type> || is_strong_v<Type>,
                     "Implement hash");
     }
-  }
-};
-
-template <typename Rep, typename Period>
-struct hashing<std::chrono::duration<Rep, Period>> {
-  hash_t operator()(std::chrono::duration<Rep, Period> const& el,
-                    hash_t const seed = BASE_HASH) {
-    return hashing<Rep>{}(el.count(), seed);
-  }
-};
-
-template <typename Clock, typename Duration>
-struct hashing<std::chrono::time_point<Clock, Duration>> {
-  hash_t operator()(std::chrono::time_point<Clock, Duration> const& el,
-                    hash_t const seed = BASE_HASH) {
-    return hashing<Duration>{}(el.time_since_epoch(), seed);
   }
 };
 

@@ -15,6 +15,7 @@
 #include "cista/endian/conversion.h"
 #include "cista/free_self_allocated.h"
 #include "cista/hash.h"
+#include "cista/hashing_chrono.h"
 #include "cista/mode.h"
 #include "cista/offset_t.h"
 #include "cista/reflection/for_each_field.h"
