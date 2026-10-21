@@ -21,6 +21,53 @@ struct has_cista_members<
 template <typename T>
 inline constexpr auto const has_cista_members_v = has_cista_members<T>::value;
 
+// cista_members() may also be static and return its fields as member
+// pointers instead of a tuple of references: static constexpr auto
+// cista_members() noexcept { return Pack<&T::a, &T::b>{}; } for any
+// template<auto...> class Pack. Field iteration then folds over the pointers,
+// so no tuple is instantiated.
+template <typename R>
+struct is_member_pointer_pack : std::false_type {};
+
+template <template <auto...> typename Pack, auto... Ps>
+struct is_member_pointer_pack<Pack<Ps...>> : std::true_type {};
+
+template <typename T, typename = void>
+struct has_cista_member_pointers : std::false_type {};
+
+template <typename T>
+struct has_cista_member_pointers<
+    T, std::void_t<decltype(std::decay_t<T>::cista_members())>>
+    : is_member_pointer_pack<
+          std::decay_t<decltype(std::decay_t<T>::cista_members())>> {};
+
+template <typename T>
+inline constexpr auto const has_cista_member_pointers_v =
+    has_cista_member_pointers<T>::value;
+
+template <typename T, template <auto...> typename Pack, auto... Ps>
+constexpr auto tie_member_pointers(T& t, Pack<Ps...>) {
+  return std::tie(t.*Ps...);
+}
+
+template <typename T, typename Fn, template <auto...> typename Pack,
+          auto... Ps>
+constexpr void for_each_member_pointer(T& t, Fn& fn, Pack<Ps...>) {
+  (fn(t.*Ps), ...);
+}
+
+// Callers take the address as an lvalue (auto&), as they did from a tuple.
+template <typename Fn, typename P>
+constexpr void call_with_address(Fn& fn, P address) {
+  fn(address);
+}
+
+template <typename T, typename Fn, template <auto...> typename Pack,
+          auto... Ps>
+constexpr void for_each_member_address(T& t, Fn& fn, Pack<Ps...>) {
+  (call_with_address(fn, &(t.*Ps)), ...);
+}
+
 template <typename... Ts, std::size_t... I>
 constexpr inline auto add_const_helper(std::tuple<Ts...>&& t,
                                        std::index_sequence<I...>) {
@@ -58,7 +105,9 @@ inline constexpr auto to_tuple_works_v =
      !std::is_polymorphic_v<T> && !std::is_union_v<T>);
 
 template <typename T,
-          std::enable_if_t<detail::has_cista_members_v<T> && std::is_const_v<T>,
+          std::enable_if_t<detail::has_cista_members_v<T> &&
+                               !detail::has_cista_member_pointers_v<T> &&
+                               std::is_const_v<T>,
                            void*> = nullptr>
 constexpr inline auto to_tuple(T& t) {
   return detail::add_const(
@@ -67,6 +116,8 @@ constexpr inline auto to_tuple(T& t) {
 }
 
 template <typename T, std::enable_if_t<detail::has_cista_members_v<T> &&
+                                           !detail::has_cista_member_pointers_v<
+                                               std::remove_reference_t<T>> &&
                                            !std::is_const_v<T>,
                                        void*> = nullptr>
 constexpr inline auto to_tuple(T&& t) {
@@ -74,7 +125,17 @@ constexpr inline auto to_tuple(T&& t) {
 }
 
 template <typename T,
-          std::enable_if_t<!detail::has_cista_members_v<T>, void*> = nullptr>
+          std::enable_if_t<detail::has_cista_member_pointers_v<T>, void*> =
+              nullptr>
+constexpr inline auto to_tuple(T& t) {
+  return detail::tie_member_pointers(
+      t, std::remove_const_t<T>::cista_members());
+}
+
+template <typename T,
+          std::enable_if_t<!detail::has_cista_members_v<T> &&
+                               !detail::has_cista_member_pointers_v<T>,
+                           void*> = nullptr>
 inline auto to_tuple(T& t) {
   constexpr auto const a = arity<T>();
   static_assert(a <= 128, "Max. supported members: 128");
