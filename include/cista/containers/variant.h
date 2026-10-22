@@ -82,12 +82,18 @@ struct variant {
   }
 
   variant(variant const& o) : idx_{o.idx_} {
+    if (!o.valid()) {
+      return;
+    }
     o.apply([this](auto&& el) {
       using Type = std::decay_t<decltype(el)>;
       new (&storage_) Type(std::forward<decltype(el)>(el));
     });
   }
   variant(variant&& o) : idx_{o.idx_} {
+    if (!o.valid()) {
+      return;
+    }
     o.apply([this](auto&& el) {
       using Type = std::decay_t<decltype(el)>;
       new (&storage_) Type(std::move(el));
@@ -95,9 +101,17 @@ struct variant {
   }
 
   variant& operator=(variant const& o) {
+    if (!o.valid()) {
+      reset();
+      return *this;
+    }
     return o.apply([&](auto&& el) -> variant& { return *this = el; });
   }
   variant& operator=(variant&& o) {
+    if (!o.valid()) {
+      reset();
+      return *this;
+    }
     return o.apply(
         [&](auto&& el) -> variant& { return *this = std::move(el); });
   }
@@ -194,6 +208,9 @@ struct variant {
   constexpr std::size_t index() const noexcept { return idx_; }
 
   void swap(variant& o) {
+    if (!valid() && !o.valid()) {
+      return;
+    }
     if (idx_ == o.idx_) {
       apply(
           [](auto&& a, auto&& b) {
@@ -206,6 +223,12 @@ struct variant {
       o = std::move(*this);
       *this = std::move(tmp);
     }
+  }
+
+  // Leaves the variant without a value.
+  constexpr void reset() {
+    destruct();
+    idx_ = NO_VALUE;
   }
 
   constexpr void destruct() {

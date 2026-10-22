@@ -269,6 +269,38 @@ TEST_CASE("variant assignment of the active alternative") {
   CHECK(cista::get<a>(v).v_ == 5);
 }
 
+TEST_CASE("variant copy, move, assignment and swap of an empty variant") {
+  using v_t = data::variant<int, data::string>;
+  auto const empty = v_t{};
+
+  auto copied = v_t{empty};
+  CHECK(!copied.valid());
+  auto moved = v_t{v_t{}};
+  CHECK(!moved.valid());
+
+  auto v = v_t{data::string{"a string long enough to live on the heap"}};
+  v = empty;
+  CHECK(!v.valid());
+
+  v = 7;
+  v = v_t{};
+  CHECK(!v.valid());
+
+  auto a = v_t{3};
+  auto b = v_t{};
+  a.swap(b);
+  CHECK(!a.valid());
+  CHECK(cista::get<int>(b) == 3);
+  a.swap(b);
+  CHECK(cista::get<int>(a) == 3);
+  CHECK(!b.valid());
+
+  auto c = v_t{};
+  b.swap(c);
+  CHECK(!b.valid());
+  CHECK(!c.valid());
+}
+
 TEST_CASE("variant supports 32 alternatives") {
   using variant32 =
       data::variant<std::integral_constant<int, 0>,
