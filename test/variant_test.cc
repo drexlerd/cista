@@ -357,3 +357,18 @@ TEST_CASE("std visit") {
       },
       cista::variant<int, float>{1});
 }
+
+TEST_CASE("variant move is noexcept if its alternatives' moves are") {
+  struct throwing_move {
+    throwing_move() = default;
+    throwing_move(throwing_move&&) noexcept(false) {}
+    throwing_move& operator=(throwing_move&&) noexcept(false) { return *this; }
+  };
+  static_assert(
+      std::is_nothrow_move_constructible_v<cista::variant<int, double>>);
+  static_assert(std::is_nothrow_move_assignable_v<cista::variant<int, double>>);
+  static_assert(!std::is_nothrow_move_constructible_v<
+                cista::variant<int, throwing_move>>);
+  static_assert(
+      !std::is_nothrow_move_assignable_v<cista::variant<int, throwing_move>>);
+}

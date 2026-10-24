@@ -81,23 +81,31 @@ struct variant {
     new (&storage_) Type(std::forward<Arg>(arg));
   }
 
+  // After a valid() check, the members below dispatch with the static apply,
+  // which has no empty case to throw for.
   variant(variant const& o) : idx_{o.idx_} {
     if (!o.valid()) {
       return;
     }
-    o.apply([this](auto&& el) {
-      using Type = std::decay_t<decltype(el)>;
-      new (&storage_) Type(std::forward<decltype(el)>(el));
-    });
+    apply(
+        [this](auto&& el) {
+          using Type = std::decay_t<decltype(el)>;
+          new (&storage_) Type(std::forward<decltype(el)>(el));
+        },
+        o.idx_, o);
   }
-  variant(variant&& o) : idx_{o.idx_} {
+  variant(variant&& o) noexcept((std::is_nothrow_move_constructible_v<T> &&
+                                 ...))
+      : idx_{o.idx_} {
     if (!o.valid()) {
       return;
     }
-    o.apply([this](auto&& el) {
-      using Type = std::decay_t<decltype(el)>;
-      new (&storage_) Type(std::move(el));
-    });
+    apply(
+        [this](auto&& el) {
+          using Type = std::decay_t<decltype(el)>;
+          new (&storage_) Type(std::move(el));
+        },
+        o.idx_, o);
   }
 
   variant& operator=(variant const& o) {
@@ -105,15 +113,18 @@ struct variant {
       reset();
       return *this;
     }
-    return o.apply([&](auto&& el) -> variant& { return *this = el; });
+    return apply([&](auto&& el) -> variant& { return *this = el; }, o.idx_, o);
   }
-  variant& operator=(variant&& o) {
+  variant& operator=(variant&& o) noexcept(
+      ((std::is_nothrow_move_constructible_v<T> &&
+        std::is_nothrow_move_assignable_v<T>) &&
+       ...)) {
     if (!o.valid()) {
       reset();
       return *this;
     }
-    return o.apply(
-        [&](auto&& el) -> variant& { return *this = std::move(el); });
+    return apply([&](auto&& el) -> variant& { return *this = std::move(el); },
+                 o.idx_, o);
   }
 
   template <typename Arg,
@@ -122,11 +133,14 @@ struct variant {
   variant& operator=(Arg&& arg) {
     using decayed_t = std::decay_t<Arg>;
     if (index_of_type<decayed_t, T...>() == idx_) {
-      apply([&](auto&& el) {
-        if constexpr (std::is_same_v<std::decay_t<decltype(el)>, decayed_t>) {
-          el = std::forward<Arg>(arg);
-        }
-      });
+      apply(
+          [&](auto&& el) {
+            if constexpr (std::is_same_v<std::decay_t<decltype(el)>,
+                                         decayed_t>) {
+              el = std::forward<Arg>(arg);
+            }
+          },
+          idx_, *this);
       return *this;
     }
     destruct();
@@ -226,17 +240,19 @@ struct variant {
   }
 
   // Leaves the variant without a value.
-  constexpr void reset() {
+  constexpr void reset() noexcept {
     destruct();
     idx_ = NO_VALUE;
   }
 
-  constexpr void destruct() {
+  constexpr void destruct() noexcept {
     if (idx_ != NO_VALUE) {
-      apply([](auto&& el) {
-        using el_type = std::decay_t<decltype(el)>;
-        el.~el_type();
-      });
+      apply(
+          [](auto&& el) {
+            using el_type = std::decay_t<decltype(el)>;
+            el.~el_type();
+          },
+          idx_, *this);
     }
   }
 
