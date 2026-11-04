@@ -5,6 +5,7 @@
 #include <array>
 #include <limits>
 #include <type_traits>
+#include <variant>
 
 #include "cista/exception.h"
 #include "cista/hashing.h"
@@ -156,6 +157,10 @@ struct variant {
   }
 
   constexpr bool valid() const noexcept { return index() != NO_VALUE; }
+
+  // As std::variant names it: holds no alternative (never assigned, or moved
+  // from).
+  constexpr bool valueless_by_exception() const noexcept { return !valid(); }
 
   constexpr operator bool() const noexcept { return valid(); }
 
@@ -402,26 +407,39 @@ bool holds_alternative(variant<Ts...> const& v) noexcept {
   return v.idx_ == index_of_type<std::decay_t<T>, Ts...>();
 }
 
+// As std::get: checked, std::bad_variant_access where another alternative (or
+// none) is held.
 template <std::size_t I, typename... Ts>
 constexpr cista::type_at_index_t<I, Ts...> const& get(
-    cista::variant<Ts...> const& v) noexcept {
+    cista::variant<Ts...> const& v) {
+  if (v.index() != I) {
+    throw_exception(std::bad_variant_access{});
+  }
   return v.template as<cista::type_at_index_t<I, Ts...>>();
 }
 
 template <std::size_t I, typename... Ts>
-constexpr cista::type_at_index_t<I, Ts...>& get(
-    cista::variant<Ts...>& v) noexcept {
+constexpr cista::type_at_index_t<I, Ts...>& get(cista::variant<Ts...>& v) {
+  if (v.index() != I) {
+    throw_exception(std::bad_variant_access{});
+  }
   return v.template as<cista::type_at_index_t<I, Ts...>>();
 }
 
 template <class T, class... Ts>
-constexpr T const& get(cista::variant<Ts...> const& v) noexcept {
+constexpr T const& get(cista::variant<Ts...> const& v) {
   static_assert(cista::index_of_type<T, Ts...>() != cista::TYPE_NOT_FOUND);
+  if (!holds_alternative<T>(v)) {
+    throw_exception(std::bad_variant_access{});
+  }
   return v.template as<T>();
 }
 template <class T, class... Ts>
-constexpr T& get(cista::variant<Ts...>& v) noexcept {
+constexpr T& get(cista::variant<Ts...>& v) {
   static_assert(cista::index_of_type<T, Ts...>() != cista::TYPE_NOT_FOUND);
+  if (!holds_alternative<T>(v)) {
+    throw_exception(std::bad_variant_access{});
+  }
   return v.template as<T>();
 }
 
@@ -466,6 +484,37 @@ struct variant_size<variant<T...>>
 template <class T>
 constexpr std::size_t variant_size_v = variant_size<T>::value;
 
+template <typename T>
+inline constexpr bool is_variant_v = false;
+template <typename... T>
+inline constexpr bool is_variant_v<variant<T...>> = true;
+
+// As std::visit, found by ADL: vis on the alternatives the variants hold;
+// std::bad_variant_access where one holds none.
+template <typename Visitor, typename V, typename... Vs,
+          typename = std::enable_if_t<is_variant_v<std::decay_t<V>> &&
+                                      (is_variant_v<std::decay_t<Vs>> && ...)>>
+constexpr decltype(auto) visit(Visitor&& vis, V&& v, Vs&&... vs) {
+  if (v.valueless_by_exception() || (vs.valueless_by_exception() || ...)) {
+    throw_exception(std::bad_variant_access{});
+  }
+  if constexpr (sizeof...(Vs) == 0U) {
+    return std::decay_t<V>::apply(std::forward<Visitor>(vis), v.index(),
+                                  std::forward<V>(v));
+  } else {
+    return std::decay_t<V>::apply(
+        [&](auto&& held) -> decltype(auto) {
+          return cista::visit(
+              [&](auto&&... rest) -> decltype(auto) {
+                return vis(std::forward<decltype(held)>(held),
+                           std::forward<decltype(rest)>(rest)...);
+              },
+              std::forward<Vs>(vs)...);
+        },
+        v.index(), std::forward<V>(v));
+  }
+}
+
 namespace raw {
 using cista::variant;
 }  // namespace raw
@@ -480,12 +529,12 @@ namespace std {
 
 template <typename Visitor, typename... T>
 constexpr decltype(auto) visit(Visitor&& vis, cista::variant<T...>&& v) {
-  return v.apply(std::forward<Visitor>(vis));
+  return cista::visit(std::forward<Visitor>(vis), std::move(v));
 }
 
 template <typename Visitor, typename... T>
 constexpr decltype(auto) visit(Visitor&& vis, cista::variant<T...> const& v) {
-  return v.apply(vis);
+  return cista::visit(std::forward<Visitor>(vis), v);
 }
 
 using cista::get;

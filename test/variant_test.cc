@@ -372,3 +372,26 @@ TEST_CASE("variant move is noexcept if its alternatives' moves are") {
   static_assert(
       !std::is_nothrow_move_assignable_v<cista::variant<int, throwing_move>>);
 }
+
+TEST_CASE("variant std interface") {
+  using v_t = data::variant<int, double>;
+  auto const i = v_t{1};
+  auto const d = v_t{2.0};
+  auto const empty = v_t{};
+
+  // get is checked, as std::get.
+  CHECK(cista::get<int>(i) == 1);
+  CHECK_THROWS_AS(cista::get<double>(i), std::bad_variant_access);
+  CHECK_THROWS_AS(cista::get<1>(i), std::bad_variant_access);
+
+  // visit is found by ADL, takes several variants, and throws on an empty one.
+  CHECK(visit([](auto const& x) { return static_cast<double>(x); }, d) == 2.0);
+  CHECK(visit([](auto const& x, auto const& y) {
+          return static_cast<double>(x) + static_cast<double>(y);
+        },
+              i, d) == 3.0);
+  CHECK_THROWS_AS(visit([](auto const&) {}, empty), std::bad_variant_access);
+
+  CHECK(empty.valueless_by_exception());
+  CHECK_FALSE(i.valueless_by_exception());
+}
