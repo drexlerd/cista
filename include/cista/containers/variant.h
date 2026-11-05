@@ -162,7 +162,9 @@ struct variant {
   // from).
   constexpr bool valueless_by_exception() const noexcept { return !valid(); }
 
-  constexpr operator bool() const noexcept { return valid(); }
+  // Explicit, as for std::optional: an implicit conversion lets pair/tuple <=>
+  // compare variants as bools.
+  constexpr explicit operator bool() const noexcept { return valid(); }
 
   friend bool operator==(variant const& a, variant const& b) noexcept {
     return a.idx_ == b.idx_
